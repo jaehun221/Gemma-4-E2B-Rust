@@ -28,12 +28,13 @@ struct PleLayer {
 }
 
 struct Attn {
-    attn_k: Array2<f32>,
     attn_q: Array2<f32>,
-    attn_v: Array2<f32>,
-    attn_o: Array2<f32>,
     q_norm: Array1<f32>,
+    attn_o: Array2<f32>,
+    attn_v: Array2<f32>,
+    attn_k: Array2<f32>,
     k_norm: Array1<f32>,
+    
 }
 
 struct Norms {
@@ -53,13 +54,13 @@ impl Weights {
     const N_LAYERS: usize = 35;
     const RMS_EPS: f32 = 1e-6;  // config.json에서 확인 후 확정
 
-    pub fn debug_shapes(&self) {
-        println!("embd: {:?}", self.embd.dim());
-        println!("layers: {}", self.layer.len());
-        println!("layer0 q_proj: {:?}", self.layer[0].attn.attn_q.dim());
-        println!("layer4 q_proj: {:?}", self.layer[4].attn.attn_q.dim());
-        println!("ple table: {:?}", self.ple_table_offset);
-    }
+    // pub fn debug_shapes(&self) {
+    //     println!("embd: {:?}", self.embd.dim());
+    //     println!("layers: {}", self.layer.len());
+    //     println!("layer0 q_proj: {:?}", self.layer[0].attn.attn_q.dim());
+    //     println!("layer4 q_proj: {:?}", self.layer[4].attn.attn_q.dim());
+    //     println!("ple table: {:?}", self.ple_table_offset);
+    // }
 
     pub fn weights_load(path: &str) -> Self {
         let file = std::fs::File::open(path).expect("file open failed");
@@ -119,6 +120,23 @@ impl Weights {
         }
     }
 
+    fn embed(&self, token_ids: &[u32]) -> Array2<f32> {
+        let hidden_size = self.embd.dim().1;
+        let scale = (hidden_size as f32).sqrt();
+
+        let mut out = Array2::zeros((token_ids.len(), hidden_size));
+
+        for (i, &token_id) in token_ids.iter().enumerate() {
+            let row = self.embd.row(token_id as usize);
+
+            for (o, &e) in out.row_mut(i).iter_mut().zip(row.iter()) {
+                *o = e * scale;
+            }
+        }
+
+        out
+    }
+
     fn get_tensor1(tensors: &SafeTensors, name: &str) -> Array1<f32> {
         let t = tensors.tensor(name).unwrap_or_else(|_| panic!("get_tensor1 failed: {name}"));
         Array1::from_vec(Self::to_f32(t.data()))
@@ -141,5 +159,14 @@ impl Weights {
             let bits = u16::from_le_bytes([b[0], b[1]]);
             f32::from_bits((bits as u32) << 16)
         }).collect()
+    }
+
+    pub fn debug_gain(&self) {
+        let gain = &self.layer[0].norm.input_norm;
+        for v in gain.iter().take(8) {
+            print!("{} ", v);
+        }
+        println!();
+        println!("평균: {}", gain.mean().unwrap());
     }
 }
