@@ -54,13 +54,13 @@ impl Weights {
     const N_LAYERS: usize = 35;
     const RMS_EPS: f32 = 1e-6;  // config.json에서 확인 후 확정
 
-    // pub fn debug_shapes(&self) {
-    //     println!("embd: {:?}", self.embd.dim());
-    //     println!("layers: {}", self.layer.len());
-    //     println!("layer0 q_proj: {:?}", self.layer[0].attn.attn_q.dim());
-    //     println!("layer4 q_proj: {:?}", self.layer[4].attn.attn_q.dim());
-    //     println!("ple table: {:?}", self.ple_table_offset);
-    // }
+    pub fn debug_shapes(&self) {
+        println!("embd: {:?}", self.embd.dim());
+        println!("layers: {}", self.layer.len());
+        println!("layer0 q_proj: {:?}", self.layer[0].attn.attn_q.dim());
+        println!("layer4 q_proj: {:?}", self.layer[4].attn.attn_q.dim());
+        println!("ple table: {:?}", self.ple_table_offset);
+    }
 
     pub fn weights_load(path: &str) -> Self {
         let file = std::fs::File::open(path).expect("file open failed");
