@@ -169,4 +169,39 @@ impl Weights {
         println!();
         println!("평균: {}", gain.mean().unwrap());
     }
+
+    pub fn debug_mlp(&self) {
+        // 1. 파이썬과 같은 입력 만들기
+        let mut x = Array2::<f32>::zeros((2, 1536));
+        x[[0, 0]] = 1.0;
+        x[[0, 1]] = 0.5;
+        x[[0, 2]] = -0.3;
+        x[[1, 0]] = -1.0;
+        x[[1, 1]] = 2.0;
+        // 나머지는 0 (zeros로 이미 채워짐)
+
+        // 2. layer 0의 mlp 가중치 꺼내기
+        let mlp_w = &self.layer[0].mlp;
+
+        // 3. mlp 실행
+        let out = crate::operation::mlp(
+            x.view(),
+            mlp_w.gate_proj.view(),
+            mlp_w.up_proj.view(),
+            mlp_w.down_proj.view(),
+        );
+
+        // 4. 결과 출력
+        println!("MLP 출력 첫 행 앞 8개:");
+        for v in out.row(0).iter().take(8) {
+            print!("{:.5} ", v);
+        }
+        println!();
+
+        println!("MLP 출력 둘째 행 앞 8개:");
+        for v in out.row(1).iter().take(8) {
+            print!("{:.5} ", v);
+        }
+        println!();
+    }
 }

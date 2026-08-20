@@ -1,4 +1,4 @@
-use ndarray::{ ArrayView1, Axis, ArrayView1, ArrayView2 };
+use ndarray::{ Array2, Axis, ArrayView1, ArrayView2 };
 
 
 pub fn rms_norm(x: ArrayView2<f32>, w: ArrayView1<f32>, eps: f32) -> Array2<f32> {
@@ -49,7 +49,7 @@ fn rope_tables(seq_len: usize, head_dim: usize, base: f32) -> (Array2<f32>, Arra
     (cos_table, sin_table)
 }
 
-fn apply_rope(q: &mut Array2<f32>, cos_table: Array2<f32>, sin_talbe: Array2<f32>) {
+fn apply_rope(q: &mut Array2<f32>, cos_table: Array2<f32>, sin_table: Array2<f32>) {
     let head_dim = q.dim().1;
     let half= head_dim / 2;
 
@@ -72,23 +72,23 @@ fn apply_rope(q: &mut Array2<f32>, cos_table: Array2<f32>, sin_talbe: Array2<f32
 
 }
 
-// 
-fn mlp(x: ArrayView2<f32>, gate_proj: ArrayView2<f32>, up_proj: ArrayView2<f32>, down_proj: ArrayView2<f32>) -> Array2<f32> {
+ 
+pub fn mlp(x: ArrayView2<f32>, gate_proj: ArrayView2<f32>, up_proj: ArrayView2<f32>, down_proj: ArrayView2<f32>) -> Array2<f32> {
     let gate = x.dot(&gate_proj.t());
     let up = x.dot(&up_proj.t());
 
-    let mut hidden = gate.mapv(|x| gelu(x));
+    let mut hidden = gate.mapv(gelu);
     hidden = hidden * up;
 
     hidden.dot(&down_proj.t())
 }
 
 fn gelu(x: f32) -> f32 {
-
-
+    let c = (2.0 / std::f32::consts::PI).sqrt();
+    0.5 * x * (1.0 + (c * (x + 0.044715 * x.powi(3))).tanh())
 }
 
 
-fn attention() -> Array2<f32> {
+// fn attention() -> Array2<f32> {
 
-}
+// }
