@@ -1,3 +1,5 @@
+# Rust MLP 검증을 위한 테스트 코드
+
 import torch
 import torch.nn.functional as F
 from safetensors import safe_open

@@ -1,5 +1,5 @@
-use ndarray::{ Array2, Axis, ArrayView1, ArrayView2 };
-
+use ndarray::{ Array2, Axis, ArrayView1, ArrayView2, s, concatenate};
+use crate::{config::TextConfig, weights::Attn};
 
 pub fn rms_norm(x: ArrayView2<f32>, w: ArrayView1<f32>, eps: f32) -> Array2<f32> {
     let mut out = Array2::zeros(x.dim()); // x.dim(): [token수, 가중치 수]
@@ -7,12 +7,10 @@ pub fn rms_norm(x: ArrayView2<f32>, w: ArrayView1<f32>, eps: f32) -> Array2<f32>
     for (i, row) in x.axis_iter(Axis(0)).enumerate() {
         let n = row.len() as f32;
 
-        // 각 토큰의 제곱 평균
         let mean_sq = row.iter().map(|&v| v * v).sum::<f32>() / n;
 
         let rms = (mean_sq + eps).sqrt();
          
-        // out : 최종 반환할 Array, row : 입력값, w : 가중치 
         for ((o, &xi), &wi) in out.row_mut(i).iter_mut().zip(row.iter()).zip(w.iter()) {
             *o = (xi/rms) * wi
         }
@@ -22,54 +20,43 @@ pub fn rms_norm(x: ArrayView2<f32>, w: ArrayView1<f32>, eps: f32) -> Array2<f32>
 }
 
 
-// RoPE에 필요한 cos, sin Array를 생성
+
 fn rope_tables(seq_len: usize, head_dim: usize, base: f32) -> (Array2<f32>, Array2<f32>) {
     let half = head_dim / 2;
 
-    // 결과 테이블: head_dim 전체 크기
-    let mut cos_table = Array2::zeros((seq_len, head_dim));
-    let mut sin_table = Array2::zeros((seq_len, head_dim));
+
+    let mut cos_table = Array2::zeros((seq_len, half));
+    let mut sin_table = Array2::zeros((seq_len, half));
 
     for pos in 0..seq_len {
         for i in 0..half {
-            // 속도 θ_i = base^(-2i/head_dim)
-            let theta = base.powf(-2.0 * i as f32 / head_dim as f32);
-            // 각도 = 위치 × 속도
-            let angle = pos as f32 * theta;
 
+            let theta = base.powf(-2.0 * i as f32 / head_dim as f32);
+            let angle = pos as f32 * theta;
             let (s, c) = angle.sin_cos();
 
-            // 앞 절반(i)과 뒤 절반(i+half)에 같은 값
             cos_table[[pos, i]] = c;
-            cos_table[[pos, i + half]] = c;
             sin_table[[pos, i]] = s;
-            sin_table[[pos, i + half]] = s;
         }
     }
     (cos_table, sin_table)
 }
 
-fn apply_rope(q: &mut Array2<f32>, cos_table: Array2<f32>, sin_table: Array2<f32>) {
-    let head_dim = q.dim().1;
-    let half= head_dim / 2;
+fn apply_rope(q: &mut Array2<f32>, cos_table: &Array2<f32>, sin_table: &Array2<f32>) {
+    let half = q.dim().1 / 2;
 
     for pos in 0..q.dim().0 {
-        let row: Vec<f32> = q.row(pos).to_vec();
+        for i in 0..half {
+            let x = q[[pos, i]];
+            let y = q[[pos, i + half]];
 
-        for j in 0..head_dim { 
-            let cos = cos_table[[pos, j]];
-            let sin = sin_table[[pos, j]];
+            let cos = cos_table[[pos, i]];
+            let sin = sin_table[[pos, i]];
 
-            let rotated = if j < half {
-                -row[j + half]
-            } else {
-                row[j - half]
-            };
-
-            q[[pos, j]] = row[j] * cos + rotated * sin;
+            q[[pos, i]]        = x * cos - y * sin;
+            q[[pos, i + half]] = x * sin + y * cos;
         }
     }
-
 }
 
  
@@ -86,9 +73,87 @@ pub fn mlp(x: ArrayView2<f32>, gate_proj: ArrayView2<f32>, up_proj: ArrayView2<f
 fn gelu(x: f32) -> f32 {
     let c = (2.0 / std::f32::consts::PI).sqrt();
     0.5 * x * (1.0 + (c * (x + 0.044715 * x.powi(3))).tanh())
+    
 }
 
 
-// fn attention() -> Array2<f32> {
+fn per_layer_embedding() {
 
-// }
+}
+
+fn attention(x: ArrayView2<f32>, attn: &Attn, cos_table: &Array2<f32>, sin_table: &Array2<f32>, cfg: &TextConfig, is_sliding: bool, ) -> Array2<f32> {
+    let q = x.dot(&attn.attn_q.t());
+    let mut k = x.dot(&attn.attn_k.t());
+    let v = x.dot(&attn.attn_v.t());
+
+    k = rms_norm(k.view(), attn.k_norm.view(), cfg.rms_norm_eps);
+    apply_rope(&mut k, cos_table, sin_table);
+
+    let mut head_out: Vec<Array2<f32>> = Vec::new();
+    let head_dim = cfg.head_dim;
+
+    for head_idx in 0..cfg.num_attention_heads {
+        let q_head = q.slice(s![.., head_idx*head_dim..head_idx*head_dim+head_dim]).to_owned();
+        let mut q_head_norm = rms_norm(q_head.view(), attn.q_norm.view(), cfg.rms_norm_eps);
+        apply_rope(&mut q_head_norm, cos_table, sin_table);
+
+        // score [T, T] 
+        let mut score = q_head_norm.dot(&k.t()) / (head_dim as f32).sqrt();
+
+        masking(&mut score, is_sliding, cfg.sliding_window);
+        softmax(&mut score);
+
+        let head_out_v = score.dot(&v);
+        head_out.push(head_out_v);
+
+    }
+
+    let head_out: Vec<_> = head_out.iter().map(|a| a.view()).collect();
+    let concat = concatenate(Axis(1), &head_out).unwrap();
+
+    let out = concat.dot(&attn.attn_o.t());
+
+    out
+}
+
+fn masking(score: &mut Array2<f32>, is_sliding: bool, sliding_window: usize) {
+    let n = score.dim().0;
+
+    for i in 0..n {
+        for j in 0..n {
+            
+            if j > i {
+                score[[i, j]] = f32::NEG_INFINITY;
+            }
+
+            if is_sliding && i - j > sliding_window {
+                score[[i, j]] = f32::NEG_INFINITY;
+            }
+        }
+    }
+}
+
+fn softmax(x: &mut Array2<f32>) {
+    for mut row in x.axis_iter_mut(Axis(0)) {
+        let max_vlaue = row.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+
+        let mut sum = 0.0;
+
+        for i in row.iter_mut() {
+            *i = (*i - max_vlaue).exp();
+            sum += *i;
+        }
+
+        for i in row.iter_mut() {
+            *i /= sum;
+        }
+
+    }
+}
+
+fn decoder_blcok() -> Array2<f32> {
+
+}
+
+
+// TODO: Attention, PLE, KVCache, tokenizer 구현
