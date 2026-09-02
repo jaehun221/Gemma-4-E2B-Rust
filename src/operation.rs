@@ -1,5 +1,5 @@
 use ndarray::{ Array2, Axis, ArrayView1, ArrayView2, s, concatenate};
-use crate::{config::TextConfig, weights::Attn};
+use crate::{config::TextConfig, weights::{ Attn, Block }};
 
 pub fn rms_norm(x: ArrayView2<f32>, w: ArrayView1<f32>, eps: f32) -> Array2<f32> {
     let mut out = Array2::zeros(x.dim()); // x.dim(): [token수, 가중치 수]
@@ -20,10 +20,8 @@ pub fn rms_norm(x: ArrayView2<f32>, w: ArrayView1<f32>, eps: f32) -> Array2<f32>
 }
 
 
-
 fn rope_tables(seq_len: usize, head_dim: usize, base: f32) -> (Array2<f32>, Array2<f32>) {
     let half = head_dim / 2;
-
 
     let mut cos_table = Array2::zeros((seq_len, half));
     let mut sin_table = Array2::zeros((seq_len, half));
@@ -41,6 +39,7 @@ fn rope_tables(seq_len: usize, head_dim: usize, base: f32) -> (Array2<f32>, Arra
     }
     (cos_table, sin_table)
 }
+
 
 fn apply_rope(q: &mut Array2<f32>, cos_table: &Array2<f32>, sin_table: &Array2<f32>) {
     let half = q.dim().1 / 2;
@@ -70,16 +69,13 @@ pub fn mlp(x: ArrayView2<f32>, gate_proj: ArrayView2<f32>, up_proj: ArrayView2<f
     hidden.dot(&down_proj.t())
 }
 
+
 fn gelu(x: f32) -> f32 {
     let c = (2.0 / std::f32::consts::PI).sqrt();
     0.5 * x * (1.0 + (c * (x + 0.044715 * x.powi(3))).tanh())
     
 }
 
-
-fn per_layer_embedding() {
-
-}
 
 fn attention(x: ArrayView2<f32>, attn: &Attn, cos_table: &Array2<f32>, sin_table: &Array2<f32>, cfg: &TextConfig, is_sliding: bool, ) -> Array2<f32> {
     let q = x.dot(&attn.attn_q.t());
@@ -97,16 +93,16 @@ fn attention(x: ArrayView2<f32>, attn: &Attn, cos_table: &Array2<f32>, sin_table
         let mut q_head_norm = rms_norm(q_head.view(), attn.q_norm.view(), cfg.rms_norm_eps);
         apply_rope(&mut q_head_norm, cos_table, sin_table);
 
-        // score [T, T] 
+        // score [T, T]
         let mut score = q_head_norm.dot(&k.t()) / (head_dim as f32).sqrt();
-
+        
         masking(&mut score, is_sliding, cfg.sliding_window);
         softmax(&mut score);
 
         let head_out_v = score.dot(&v);
         head_out.push(head_out_v);
-
     }
+
 
     let head_out: Vec<_> = head_out.iter().map(|a| a.view()).collect();
     let concat = concatenate(Axis(1), &head_out).unwrap();
@@ -151,9 +147,34 @@ fn softmax(x: &mut Array2<f32>) {
     }
 }
 
-fn decoder_blcok() -> Array2<f32> {
+// 반복되는 Layer 내부 연산 구현
+pub fn decoder_blcok(x: ArrayView2<f32>, block: &Block, per_layer_input: ArrayView2<f32>, cos_table: &Array2<f32>, sin_table: &Array2<f32>, cfg: &TextConfig, is_sliding: bool,) -> Array2<f32> {
 
+    // Attention
+    let residual = x.to_owned();
+    let h = rms_norm(x, block.norm.input_norm.view(), cfg.rms_norm_eps);
+    let h = attention(h.view(), &block.attn, cos_table, sin_table, cfg, is_sliding);
+    let h = rms_norm(h.view(), block.norm.post_attn_norm.view(), cfg.rms_norm_eps);
+    let h = residual + h;
+
+    // MLP
+    let residual = h.clone();
+    let h = rms_norm(h.view(), block.norm.pre_ffn_norm.view(), cfg.rms_norm_eps);
+    let h = mlp(h.view(), block.mlp.gate_proj.view(), block.mlp.up_proj.view(), block.mlp.down_proj.view());
+    let h = rms_norm(h.view(), block.norm.post_ffn_norm.view(), cfg.rms_norm_eps);
+    let h = residual + h;
+
+    // Per Layer Embedding
+    let residual = h.clone();
+    let mut h = residual.dot(&block.ple.input_gate.t());
+    h = h.mapv(gelu);
+    h = h * per_layer_input;
+    h = h.dot(&block.ple.projection.t());
+    h = rms_norm(h.view(), block.ple.post_norm.view(), cfg.rms_norm_eps);
+    h = residual + h;
+
+
+    h * block.ple.scalar
 }
-
 
 // TODO: Attention, PLE, KVCache, tokenizer 구현

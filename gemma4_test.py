@@ -1,48 +1,40 @@
-# Rust MLP 검증을 위한 테스트 코드
-
 import torch
 import torch.nn.functional as F
 from safetensors import safe_open
 
-
 MODEL_PATH = "gemma-4-e2b/model.safetensors"
-LAYER = 0            
-SEED = 42                      
-
 
 with safe_open(MODEL_PATH, framework="pt") as f:
-    gate_proj = f.get_tensor(f"model.language_model.layers.{LAYER}.mlp.gate_proj.weight").float()
-    up_proj   = f.get_tensor(f"model.language_model.layers.{LAYER}.mlp.up_proj.weight").float()
-    down_proj = f.get_tensor(f"model.language_model.layers.{LAYER}.mlp.down_proj.weight").float()
+    ple_table = f.get_tensor("model.language_model.embed_tokens_per_layer.weight").float()
+    model_proj = f.get_tensor("model.language_model.per_layer_model_projection.weight").float()
+    proj_norm = f.get_tensor("model.language_model.per_layer_projection_norm.weight").float()
 
-print("gate_proj:", gate_proj.shape)   
-print("up_proj:  ", up_proj.shape)     
-print("down_proj:", down_proj.shape)   
+num_layers = 35
+ple_dim = 256
+hidden_size = 1536
 
+# 고정 입력
+token_ids = [2, 100, 500]   # 예시 토큰
+embeds = torch.zeros(3, 1536)
+embeds[0,0]=1.0; embeds[0,1]=0.5; embeds[1,0]=-1.0; embeds[2,0]=2.0
 
-torch.manual_seed(SEED)
-hidden_size = gate_proj.shape[1]      
-# torch.manual_seed(SEED) / torch.randn 대신
-x = torch.zeros(2, 1536)
-x[0, 0] = 1.0
-x[0, 1] = 0.5
-x[0, 2] = -0.3
-x[1, 0] = -1.0
-x[1, 1] = 2.0
-# 나머지 0    
+# --- token-identity ---
+identity = ple_table[token_ids]                    # [3, 8960]
+identity = identity * (ple_dim ** 0.5)             # ×16
+identity = identity.reshape(3, num_layers, ple_dim)  # [3, 35, 256]
 
+# --- context-aware ---
+context = embeds @ model_proj.T                     # [3, 8960]
+context = context * (hidden_size ** -0.5)           # ×(1/√1536)
+context = context.reshape(3, num_layers, ple_dim)   # [3, 35, 256]
+# RMSNorm
+mean_sq = context.pow(2).mean(-1, keepdim=True)
+context = context * torch.rsqrt(mean_sq + 1e-6) * proj_norm
 
-gate = x @ gate_proj.T                 
-up   = x @ up_proj.T                   
-hidden = F.gelu(gate, approximate='tanh') * up   
-out = hidden @ down_proj.T
+# --- 결합 ---
+ple = (context + identity) * (2.0 ** -0.5)          # ×(1/√2)
 
-
-print("\n입력 x 첫 행 앞 8개:")
-print(x[0, :8])
-
-print("\nMLP 출력 첫 행 앞 8개:")
-print(out[0, :8])
-
-print("\nMLP 출력 둘째 행 앞 8개:")
-print(out[1, :8])
+# 출력
+print("identity [0,0,:8]:", identity[0,0,:8])
+print("context [0,0,:8]:", context[0,0,:8])
+print("최종 ple [0,0,:8]:", ple[0,0,:8])

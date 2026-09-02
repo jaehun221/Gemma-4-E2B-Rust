@@ -1,6 +1,8 @@
-use ndarray::{Array2, Array1};
+use ndarray::{ Array1, Array2, Array3, ArrayView2, s };
 use memmap2::Mmap;
 use safetensors::SafeTensors;
+
+use crate::config::TextConfig;
 
 pub struct Weights {
     embd: Array2<f32>,
@@ -14,17 +16,17 @@ pub struct Weights {
 }
 
 pub struct Block {
-    attn: Attn,
-    mlp: Mlp,
-    norm: Norms,
-    ple: PleLayer,
+    pub attn: Attn,
+    pub mlp: Mlp,
+    pub norm: Norms,
+    pub ple: PleLayer,
 }
 
-struct PleLayer {
-    projection: Array2<f32>,
-    input_gate: Array2<f32>,
-    post_norm: Array1<f32>,
-    scalar: f32,
+pub struct PleLayer {
+    pub projection: Array2<f32>,
+    pub input_gate: Array2<f32>,
+    pub post_norm: Array1<f32>,
+    pub scalar: f32,
 }
 
 pub struct Attn {
@@ -36,17 +38,17 @@ pub struct Attn {
     pub k_norm: Array1<f32>,
 }
 
-struct Norms {
-    input_norm: Array1<f32>,
-    post_attn_norm: Array1<f32>,
-    pre_ffn_norm: Array1<f32>,
-    post_ffn_norm: Array1<f32>,
+pub struct Norms {
+    pub input_norm: Array1<f32>,
+    pub post_attn_norm: Array1<f32>,
+    pub pre_ffn_norm: Array1<f32>,
+    pub post_ffn_norm: Array1<f32>,
 }
 
-struct Mlp {
-    up_proj: Array2<f32>,
-    gate_proj: Array2<f32>,
-    down_proj: Array2<f32>,
+pub struct Mlp {
+    pub up_proj: Array2<f32>,
+    pub gate_proj: Array2<f32>,
+    pub down_proj: Array2<f32>,
 }
 
 impl Weights {
@@ -174,6 +176,7 @@ impl Weights {
     pub fn debug_mlp(&self) {
 
         let mut x = Array2::<f32>::zeros((2, 1536));
+
         x[[0, 0]] = 1.0;
         x[[0, 1]] = 0.5;
         x[[0, 2]] = -0.3;
@@ -201,4 +204,82 @@ impl Weights {
         }
         println!();
     }
+
+    fn ple_token_identity(&self, token_ids: &[u32], cfg: &TextConfig) -> Array3<f32> {
+        let num_layers = cfg.num_hidden_layers;
+        let ple_dim = cfg.hidden_size_per_layer_input;
+        let scale = (ple_dim as f32).sqrt();    // 256.sqrt()
+
+        let mut out: Array3<f32> = Array3::zeros((token_ids.len(), num_layers, ple_dim)); 
+
+        for (i, &token_id) in token_ids.iter().enumerate() {
+            let row_byte = num_layers * ple_dim * 2;     // bf16이기 때문에 *2
+            let start =  self.ple_table_offset.0 + row_byte * (token_id as usize);
+            let end = start + row_byte;
+
+            let byte = &self.mmap[start..end];
+            let value = Self::to_f32(byte);
+
+            for layer in 0..num_layers {
+                for dim in 0..ple_dim {
+                    let flat_idx = ple_dim * layer + dim;
+                    out[[i, layer, dim]] = value[flat_idx] * scale;
+                }
+            }
+        }
+
+        out
+    }
+
+    fn prepare_ple(&self, token_ids: &[u32], embed: ArrayView2<f32>, cfg: &TextConfig) -> Array3<f32> {
+        let identity = self.ple_token_identity(token_ids, cfg);
+
+        let token_len = token_ids.len();
+        let num_layers = cfg.num_hidden_layers;
+        let ple_dim = cfg.hidden_size_per_layer_input;
+
+        let mut out = Array3::zeros((token_len, num_layers, ple_dim));
+        let proj = embed.dot(&self.ple_model_proj.t());
+        let scaled = proj * (1.0 / (cfg.hidden_size as f32).sqrt());
+
+        let ple_scale = 1.0 / 2.0_f32.sqrt();
+
+        for i in 0..token_len {
+            for layer in 0..num_layers {
+                let start = layer*ple_dim;
+                let l = scaled.slice(s![i, start..start+ple_dim]);
+                let mean_sq = l.iter().map(|&x| x * x).sum::<f32>() / ple_dim as f32;
+                let rms = (mean_sq + cfg.rms_norm_eps).sqrt();
+                
+                for dim in 0..ple_dim {
+                    let raw = scaled[(i, layer * ple_dim + dim)];
+                    let normed = raw / rms * self.ple_proj_norm[dim];
+                    out[[i, layer, dim]] = (normed + identity[[i, layer, dim]]) * ple_scale;
+                }
+                
+            }
+        }
+
+        out
+    }
+
+    pub fn debug_ple(&self, cfg: &TextConfig) {
+        let token_ids = [2u32, 100, 500];   // 파이썬과 동일
+
+        let mut embeds = Array2::<f32>::zeros((3, 1536));
+        embeds[[0,0]]=1.0; embeds[[0,1]]=0.5; embeds[[1,0]]=-1.0; embeds[[2,0]]=2.0;
+
+        // 1. identity만
+        let identity = self.ple_token_identity(&token_ids, cfg);
+        println!("identity [0,0,:8]:");
+        for d in 0..8 { print!("{:.5} ", identity[[0,0,d]]); }
+        println!();
+
+        // 3. 최종
+        let ple = self.prepare_ple(&token_ids, embeds.view(), cfg);
+        println!("최종 ple [0,0,:8]:");
+        for d in 0..8 { print!("{:.5} ", ple[[0,0,d]]); }
+        println!();
+    }
+
 }         
