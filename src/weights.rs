@@ -55,59 +55,14 @@ pub struct Mlp {
 }
 
 impl Weights {
-    pub fn debug_layer_15(&self, cfg: &TextConfig) {
+    pub fn debug_forward(&self, cfg: &TextConfig) {
         let token_ids = [2u32, 100, 500];
-        let embeds = self.embed(&token_ids);
-        let ple = self.prepare_ple(&token_ids, embeds.view(), cfg);
-        let (cos_s, sin_s) = rope_tables(token_ids.len(), 256, 10000.0);
-        let (cos_g, sin_g) = rope_tables(token_ids.len(), 512, 1000000.0);
+        let logits = self.forward(&token_ids, cfg);
 
-        let mut hidden = embeds;
-        for i in 0..=15 {   // 0~15까지
-            let block = &self.layer[i];
-            let is_sliding = cfg.layer_types[i] == "sliding_attention";
-            let ple_i = ple.slice(s![.., i, ..]);
-            let (cos, sin) = if is_sliding { (&cos_s, &sin_s) } else { (&cos_g, &sin_g) };
-            hidden = decoder_block(hidden.view(), block, ple_i, cos, sin, cfg, is_sliding);
-
-            if i == 14 {   // 레이어 14 출력
-                println!("layer14 [0,:8]:");
-                for d in 0..8 { print!("{:.5} ", hidden[[0, d]]); }
-                println!();
-            }
+        println!("logits [0, :8]:");
+        for d in 0..8 {
+            print!("{:.5} ", logits[[0, d]]);
         }
-        // 레이어 15 출력
-        println!("layer15 [0,:8]:");
-        for d in 0..8 { print!("{:.5} ", hidden[[0, d]]); }
-        println!();
-    }
-
-    pub fn debug_layer4(&self, cfg: &TextConfig) {
-        let token_ids = [2u32, 100, 500];
-
-        let embeds = self.embed(&token_ids);
-        let ple = self.prepare_ple(&token_ids, embeds.view(), cfg);
-
-        let (cos_s, sin_s) = rope_tables(token_ids.len(), 256, 10000.0);
-        let (cos_g, sin_g) = rope_tables(token_ids.len(), 512, 1000000.0);
-
-        let mut hidden = embeds;
-
-        for i in 0..=4 {   // 레이어 0~4까지만
-            let block = &self.layer[i];
-            let is_sliding = cfg.layer_types[i] == "sliding_attention";
-            let ple_i = ple.slice(s![.., i, ..]);
-            let (cos, sin) = if is_sliding {
-                (&cos_s, &sin_s)
-            } else {
-                (&cos_g, &sin_g)
-            };
-            hidden = decoder_block(hidden.view(), block, ple_i, cos, sin, cfg, is_sliding);
-        }
-
-        // 레이어 4 출력
-        println!("layer4 out [0, :8]:");
-        for d in 0..8 { print!("{:.5} ", hidden[[0, d]]); }
         println!();
     }
 
@@ -116,13 +71,35 @@ impl Weights {
         let ple = self.prepare_ple(token_ids, hidden.view(), cfg);
 
         // cos_sliding, sin_sliding
-        let (cos_s, sin_s) = rope_tables(token_ids.len(), cfg.head_dim, 10000.0);
+        let (cos_s, sin_s) = rope_tables(
+            token_ids.len(),
+            cfg.head_dim,
+            cfg.rope_parameters.sliding_attention.rope_theta,
+        );
 
         // cos_global, sin_global
-        let (cos_g, sin_g) = rope_tables(token_ids.len(), cfg.head_dim*2, 1000000.0);
+        let (cos_g, sin_g) = rope_tables(
+            token_ids.len(),
+            cfg.global_head_dim,
+            cfg.rope_parameters.full_attention.rope_theta,
+        );
+
+        let mut kv_sliding: Option<(Array2<f32>, Array2<f32>)> = None;
+        let mut kv_full: Option<(Array2<f32>, Array2<f32>)> = None;
 
         for (i, block) in self.layer.iter().enumerate() {
             let is_sliding = cfg.layer_types[i] == "sliding_attention";
+            let is_shared = i > 14;
+
+            let kv_share = if is_shared {
+                if is_sliding {
+                    kv_sliding.as_ref().map(|(k, v)| (k, v))
+                } else {
+                    kv_full.as_ref().map(|(k, v)| (k, v))
+                }
+            } else {
+                None
+            };
 
             let per_layer_input = ple.slice(s![.., i, ..]);
             let (cos, sin) = if is_sliding {
@@ -130,8 +107,10 @@ impl Weights {
             } else {
                 (&cos_g, &sin_g)
             };
-            hidden = decoder_block(
+
+            let (out, k, v) = decoder_block(
                 hidden.view(),
+                kv_share,
                 block,
                 per_layer_input,
                 cos,
@@ -139,6 +118,14 @@ impl Weights {
                 cfg,
                 is_sliding,
             );
+
+            if i == 13 {
+                kv_sliding = Some((k, v))
+            } else if i == 14 {
+                kv_full = Some((k, v))
+            }
+
+            hidden = out;
         }
 
         let hidden = rms_norm(hidden.view(), self.norm_f.view(), cfg.rms_norm_eps);

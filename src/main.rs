@@ -9,5 +9,5 @@ fn main() {
     let w = Weights::weights_load("gemma-4-e2b/model.safetensors");
     let cfg = Config::load("gemma-4-e2b/config.json");
 
-    w.debug_layer_15(&cfg.text_config);
+    w.debug_forward(&cfg.text_config);
 }

@@ -78,7 +78,6 @@ fn gelu(x: f32) -> f32 {
     0.5 * x * (1.0 + (c * (x + 0.044715 * x.powi(3))).tanh())
 }
 
-
 fn attention(
     x: ArrayView2<f32>,
     kv: Option<(&Array2<f32>, &Array2<f32>)>,
@@ -88,7 +87,6 @@ fn attention(
     cfg: &TextConfig,
     is_sliding: bool,
 ) -> (Array2<f32>, Array2<f32>, Array2<f32>) {
-
     let head_dim = if is_sliding {
         cfg.head_dim
     } else {
@@ -108,7 +106,7 @@ fn attention(
     };
 
     let q = x.dot(&attn.attn_q.t());
-    
+
     let mut head_out: Vec<Array2<f32>> = Vec::new();
 
     for head_idx in 0..cfg.num_attention_heads {
@@ -173,17 +171,26 @@ fn softmax(x: &mut Array2<f32>) {
 #[allow(dead_code)]
 pub fn decoder_block(
     x: ArrayView2<f32>,
+    kv: Option<(&Array2<f32>, &Array2<f32>)>,
     block: &Block,
     per_layer_input: ArrayView2<f32>,
     cos_table: &Array2<f32>,
     sin_table: &Array2<f32>,
     cfg: &TextConfig,
     is_sliding: bool,
-) -> Array2<f32> {
+) -> (Array2<f32>, Array2<f32>, Array2<f32>) {
     // Attention
     let residual = x.to_owned();
     let h = rms_norm(x, block.norm.input_norm.view(), cfg.rms_norm_eps);
-    let h = attention(h.view(), &block.attn, cos_table, sin_table, cfg, is_sliding);
+    let (h, k, v) = attention(
+        h.view(),
+        kv,
+        &block.attn,
+        cos_table,
+        sin_table,
+        cfg,
+        is_sliding,
+    );
     let h = rms_norm(h.view(), block.norm.post_attn_norm.view(), cfg.rms_norm_eps);
     let h = residual + h;
 
@@ -208,7 +215,7 @@ pub fn decoder_block(
     h = rms_norm(h.view(), block.ple.post_norm.view(), cfg.rms_norm_eps);
     h = residual + h;
 
-    h * block.ple.scalar
+    (h * block.ple.scalar, k, v)
 }
 
 // TODO: Attention, PLE, KVCache, tokenizer 구현
