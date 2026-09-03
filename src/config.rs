@@ -9,33 +9,30 @@ pub struct Config {
 
 #[derive(Deserialize, Debug)]
 pub struct TextConfig {
+    pub num_hidden_layers: usize,
+    pub hidden_size: usize,
+    pub head_dim: usize,        // 256 (local)
+    pub global_head_dim: usize, // 512 (global)
+    pub num_attention_heads: usize,
+    pub num_key_value_heads: usize,
+    pub intermediate_size: usize,
+    pub vocab_size: usize,
 
-    pub num_hidden_layers: usize,          
-    pub hidden_size: usize,               
-    pub head_dim: usize,            // 256 (local)
-    pub global_head_dim: usize,     // 512 (global)
-    pub num_attention_heads: usize,      
-    pub num_key_value_heads: usize,       
-    pub intermediate_size: usize,        
-    pub vocab_size: usize,                 
-
-
-    pub rms_norm_eps: f32,                 
+    pub rms_norm_eps: f32,
 
     // local/global
-    pub layer_types: Vec<String>,   // sliding_attention, full_attention
-    pub sliding_window: usize,            
-    pub num_kv_shared_layers: usize,      
+    pub layer_types: Vec<String>, // sliding_attention, full_attention
+    pub sliding_window: usize,
+    pub num_kv_shared_layers: usize,
     pub rope_parameters: RopeParameters,
 
-    pub hidden_size_per_layer_input: usize, 
-    
-    pub final_logit_softcapping: f32,     
-    pub tie_word_embeddings: bool,         
+    pub hidden_size_per_layer_input: usize,
 
+    pub final_logit_softcapping: f32,
+    pub tie_word_embeddings: bool,
 
-    pub bos_token_id: u32,                
-    pub eos_token_id: u32,                
+    pub bos_token_id: u32,
+    pub eos_token_id: u32,
     pub pad_token_id: u32, // batch processing에 사용됨
 }
 

@@ -1,14 +1,13 @@
-mod weights;
 mod config;
-mod operation;   
+mod operation;
+mod weights;
 
-use weights::Weights;
 use config::Config;
-use operation::decoder_blcok;
+use weights::Weights;
 
 fn main() {
     let w = Weights::weights_load("gemma-4-e2b/model.safetensors");
     let cfg = Config::load("gemma-4-e2b/config.json");
 
-    w.debug_ple(&cfg.text_config);
+    w.debug_layer_15(&cfg.text_config);
 }
