@@ -1,3 +1,5 @@
+# Rust 구현 결과와 비교하기 위한 Test code
+
 import torch
 from transformers import AutoModelForCausalLM
 

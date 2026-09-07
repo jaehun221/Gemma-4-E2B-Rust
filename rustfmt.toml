@@ -1,0 +1,12 @@
+max_width = 100
+
+tab_spaces = 4
+
+edition = "2024"
+
+fn_params_layout = "Tall"
+
+fn_single_line = true
+
+imports_granularity = "Module"
+group_imports = "StdExternalCrate"

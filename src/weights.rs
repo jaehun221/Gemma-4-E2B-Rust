@@ -2,10 +2,8 @@ use memmap2::Mmap;
 use ndarray::{Array1, Array2, Array3, ArrayView2, s};
 use safetensors::SafeTensors;
 
-use crate::{
-    config::TextConfig,
-    operation::{decoder_block, rms_norm, rope_tables},
-};
+use crate::config::TextConfig;
+use crate::operation::{decoder_block, rms_norm, rope_tables};
 
 pub struct Weights {
     embd: Array2<f32>,
@@ -15,7 +13,6 @@ pub struct Weights {
     ple_table_offset: (usize, usize, usize),
     ple_model_proj: Array2<f32>,
     ple_proj_norm: Array1<f32>,
-    rms_eps: f32,
 }
 
 pub struct Block {
@@ -34,10 +31,11 @@ pub struct PleLayer {
 
 pub struct Attn {
     pub attn_q: Array2<f32>,
-    pub q_norm: Array1<f32>,
-    pub attn_o: Array2<f32>,
-    pub attn_v: Array2<f32>,
     pub attn_k: Array2<f32>,
+    pub attn_v: Array2<f32>,
+    pub attn_o: Array2<f32>,
+
+    pub q_norm: Array1<f32>,
     pub k_norm: Array1<f32>,
 }
 
@@ -119,6 +117,8 @@ impl Weights {
                 is_sliding,
             );
 
+
+            // KV Share를 사용하지 않는 레이어중 마지막 레이어를 타입별로 저장하여 공유한다.
             if i == 13 {
                 kv_sliding = Some((k, v))
             } else if i == 14 {
@@ -227,7 +227,6 @@ impl Weights {
             ple_table_offset,
             layer,
             mmap,
-            rms_eps: Self::RMS_EPS,
         }
     }
 

@@ -1,8 +1,7 @@
-use crate::{
-    config::TextConfig,
-    weights::{Attn, Block},
-};
 use ndarray::{Array2, ArrayView1, ArrayView2, Axis, concatenate, s};
+
+use crate::config::TextConfig;
+use crate::weights::{Attn, Block};
 
 pub fn rms_norm(x: ArrayView2<f32>, w: ArrayView1<f32>, eps: f32) -> Array2<f32> {
     let mut out = Array2::zeros(x.dim()); // x.dim(): [token수, 가중치 수]
@@ -217,5 +216,3 @@ pub fn decoder_block(
 
     (h * block.ple.scalar, k, v)
 }
-
-// TODO: Attention, PLE, KVCache, tokenizer 구현
