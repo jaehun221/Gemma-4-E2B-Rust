@@ -1,4 +1,4 @@
-## Weights Download
+## Download Weights
 
 ```
 # huggingface_hub install
