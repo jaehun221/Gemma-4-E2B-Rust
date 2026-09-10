@@ -21,15 +21,26 @@ pub fn rms_norm(x: ArrayView2<f32>, w: ArrayView1<f32>, eps: f32) -> Array2<f32>
     out
 }
 
-pub fn rope_tables(seq_len: usize, head_dim: usize, base: f32) -> (Array2<f32>, Array2<f32>) {
+pub fn rope_tables(
+    seq_len: usize,
+    head_dim: usize,
+    base: f32,
+    partial_factor: f32,
+) -> (Array2<f32>, Array2<f32>) {
     let half = head_dim / 2;
+    let rope_angles = (partial_factor * head_dim as f32 / 2.0) as usize;
 
     let mut cos_table = Array2::zeros((seq_len, half));
     let mut sin_table = Array2::zeros((seq_len, half));
 
     for pos in 0..seq_len {
         for i in 0..half {
-            let theta = base.powf(-2.0 * i as f32 / head_dim as f32);
+            let theta = if i < rope_angles {
+                base.powf(-2.0 * i as f32 / head_dim as f32)
+            } else {
+                0.0
+            };
+
             let angle = pos as f32 * theta;
             let (s, c) = angle.sin_cos();
 
@@ -92,6 +103,7 @@ fn attention(
         cfg.global_head_dim
     };
 
+    // KV Share 이전 Layer에서 전달받은 kv가 있다면 복사하여 사용, 없다면 새로 생성한다.
     let (k, v) = match kv {
         Some((k, v)) => (k.clone(), v.clone()),
         None => {
@@ -99,6 +111,8 @@ fn attention(
             let v = x.dot(&attn.attn_v.t());
             k = rms_norm(k.view(), attn.k_norm.view(), cfg.rms_norm_eps);
             apply_rope(&mut k, cos_table, sin_table);
+
+            let v = rms_norm_no_scale(v.view(), cfg.rms_norm_eps);
 
             (k, v)
         }
@@ -116,7 +130,7 @@ fn attention(
         apply_rope(&mut q_head_norm, cos_table, sin_table);
 
         // score [T, T]
-        let mut score = q_head_norm.dot(&k.t()) / (head_dim as f32).sqrt();
+        let mut score = q_head_norm.dot(&k.t());
 
         masking(&mut score, is_sliding, cfg.sliding_window);
         softmax(&mut score);
@@ -140,9 +154,7 @@ fn masking(score: &mut Array2<f32>, is_sliding: bool, sliding_window: usize) {
         for j in 0..n {
             if j > i {
                 score[[i, j]] = f32::NEG_INFINITY;
-            }
-
-            if is_sliding && i - j > sliding_window {
+            } else if is_sliding && i - j > sliding_window {
                 score[[i, j]] = f32::NEG_INFINITY;
             }
         }
@@ -190,6 +202,7 @@ pub fn decoder_block(
         cfg,
         is_sliding,
     );
+
     let h = rms_norm(h.view(), block.norm.post_attn_norm.view(), cfg.rms_norm_eps);
     let h = residual + h;
 
@@ -215,4 +228,31 @@ pub fn decoder_block(
     h = residual + h;
 
     (h * block.ple.scalar, k, v)
+}
+
+pub fn argmax(x: ArrayView1<f32>) -> usize {
+    let mut best_idx = 0;
+    let mut best_val = f32::NEG_INFINITY;
+    for (i, &v) in x.iter().enumerate() {
+        if v > best_val {
+            best_val = v;
+            best_idx = i;
+        }
+    }
+    best_idx
+}
+
+pub fn rms_norm_no_scale(x: ArrayView2<f32>, eps: f32) -> Array2<f32> {
+    let mut out = Array2::zeros(x.dim());
+
+    for (i, row) in x.axis_iter(Axis(0)).enumerate() {
+        let n = row.len() as f32;
+        let mean_sq = row.iter().map(|&v| v * v).sum::<f32>() / n;
+        let rms = (mean_sq + eps).sqrt();
+
+        for (o, &xi) in out.row_mut(i).iter_mut().zip(row.iter()) {
+            *o = xi / rms;
+        }
+    }
+    out
 }

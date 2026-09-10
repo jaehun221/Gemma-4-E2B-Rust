@@ -1,9 +1,10 @@
 use memmap2::Mmap;
 use ndarray::{Array1, Array2, Array3, ArrayView2, s};
 use safetensors::SafeTensors;
+use tokenizers::Tokenizer;
 
 use crate::config::TextConfig;
-use crate::operation::{decoder_block, rms_norm, rope_tables};
+use crate::operation::{argmax, decoder_block, rms_norm, rope_tables};
 
 pub struct Weights {
     embd: Array2<f32>,
@@ -53,15 +54,29 @@ pub struct Mlp {
 }
 
 impl Weights {
-    pub fn debug_forward(&self, cfg: &TextConfig) {
-        let token_ids = [2u32, 100, 500];
-        let logits = self.forward(&token_ids, cfg);
+    pub fn generate(
+        &self,
+        prompt: &str,
+        tokenizer: &Tokenizer,
+        cfg: &TextConfig,
+        max: usize,
+    ) -> String {
+        let mut tokens = vec![cfg.bos_token_id];
+        tokens.extend(tokenizer.encode(prompt, false).unwrap().get_ids());
 
-        println!("logits [0, :8]:");
-        for d in 0..8 {
-            print!("{:.5} ", logits[[0, d]]);
+        for _ in 0..max {
+            let logits = self.forward(&tokens, cfg);
+            let last = logits.row(logits.dim().0 - 1);
+
+            let next = argmax(last) as u32;
+
+            if next == cfg.eos_token_id {
+                break;
+            }
+            tokens.push(next);
         }
-        println!();
+
+        tokenizer.decode(&tokens[1..], false).unwrap()
     }
 
     pub fn forward(&self, token_ids: &[u32], cfg: &TextConfig) -> Array2<f32> {
@@ -73,6 +88,7 @@ impl Weights {
             token_ids.len(),
             cfg.head_dim,
             cfg.rope_parameters.sliding_attention.rope_theta,
+            1.0,
         );
 
         // cos_global, sin_global
@@ -80,6 +96,7 @@ impl Weights {
             token_ids.len(),
             cfg.global_head_dim,
             cfg.rope_parameters.full_attention.rope_theta,
+            0.25,
         );
 
         let mut kv_sliding: Option<(Array2<f32>, Array2<f32>)> = None;
@@ -117,7 +134,6 @@ impl Weights {
                 is_sliding,
             );
 
-
             // KV Share를 사용하지 않는 레이어중 마지막 레이어를 타입별로 저장하여 공유한다.
             if i == 13 {
                 kv_sliding = Some((k, v))
@@ -129,24 +145,13 @@ impl Weights {
         }
 
         let hidden = rms_norm(hidden.view(), self.norm_f.view(), cfg.rms_norm_eps);
-
         let logits = hidden.dot(&self.embd.t());
-
         let logits = logits.mapv(|x| 30.0 * (x / 30.0).tanh());
 
         logits
     }
 
     const N_LAYERS: usize = 35;
-    const RMS_EPS: f32 = 1e-6; // config.json에서 확인 후 확정
-
-    pub fn debug_shapes(&self) {
-        println!("embd: {:?}", self.embd.dim());
-        println!("layers: {}", self.layer.len());
-        println!("layer0 q_proj: {:?}", self.layer[0].attn.attn_q.dim());
-        println!("layer4 q_proj: {:?}", self.layer[4].attn.attn_q.dim());
-        println!("ple table: {:?}", self.ple_table_offset);
-    }
 
     pub fn weights_load(path: &str) -> Self {
         let file = std::fs::File::open(path).expect("file open failed");
@@ -278,48 +283,6 @@ impl Weights {
             .collect()
     }
 
-    // 검증용
-    pub fn debug_gain(&self) {
-        let gain = &self.layer[0].norm.input_norm;
-        for v in gain.iter().take(8) {
-            print!("{} ", v);
-        }
-        println!();
-        println!("평균: {}", gain.mean().unwrap());
-    }
-
-    // 검증용
-    pub fn debug_mlp(&self) {
-        let mut x = Array2::<f32>::zeros((2, 1536));
-
-        x[[0, 0]] = 1.0;
-        x[[0, 1]] = 0.5;
-        x[[0, 2]] = -0.3;
-        x[[1, 0]] = -1.0;
-        x[[1, 1]] = 2.0;
-
-        let mlp_w = &self.layer[0].mlp;
-
-        let out = crate::operation::mlp(
-            x.view(),
-            mlp_w.gate_proj.view(),
-            mlp_w.up_proj.view(),
-            mlp_w.down_proj.view(),
-        );
-
-        println!("MLP 출력 첫 행 앞 8개:");
-        for v in out.row(0).iter().take(8) {
-            print!("{:.5} ", v);
-        }
-        println!();
-
-        println!("MLP 출력 둘째 행 앞 8개:");
-        for v in out.row(1).iter().take(8) {
-            print!("{:.5} ", v);
-        }
-        println!();
-    }
-
     fn ple_token_identity(&self, token_ids: &[u32], cfg: &TextConfig) -> Array3<f32> {
         let num_layers = cfg.num_hidden_layers;
         let ple_dim = cfg.hidden_size_per_layer_input;
@@ -380,31 +343,5 @@ impl Weights {
         }
 
         out
-    }
-
-    pub fn debug_ple(&self, cfg: &TextConfig) {
-        let token_ids = [2u32, 100, 500]; // 파이썬과 동일
-
-        let mut embeds = Array2::<f32>::zeros((3, 1536));
-        embeds[[0, 0]] = 1.0;
-        embeds[[0, 1]] = 0.5;
-        embeds[[1, 0]] = -1.0;
-        embeds[[2, 0]] = 2.0;
-
-        // 1. identity만
-        let identity = self.ple_token_identity(&token_ids, cfg);
-        println!("identity [0,0,:8]:");
-        for d in 0..8 {
-            print!("{:.5} ", identity[[0, 0, d]]);
-        }
-        println!();
-
-        // 3. 최종
-        let ple = self.prepare_ple(&token_ids, embeds.view(), cfg);
-        println!("최종 ple [0,0,:8]:");
-        for d in 0..8 {
-            print!("{:.5} ", ple[[0, 0, d]]);
-        }
-        println!();
     }
 }
