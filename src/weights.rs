@@ -1,9 +1,11 @@
+use std::assert_eq;
+
 use memmap2::Mmap;
 use ndarray::{Array1, Array2, Array3, ArrayView2, s};
 use safetensors::SafeTensors;
 use tokenizers::Tokenizer;
 
-use crate::config::TextConfig;
+use crate::config::{Config, TextConfig};
 use crate::operation::{argmax, decoder_block, rms_norm, rope_tables};
 
 pub struct Weights {
@@ -58,19 +60,21 @@ impl Weights {
         &self,
         prompt: &str,
         tokenizer: &Tokenizer,
-        cfg: &TextConfig,
+        cfg: &Config,
         max: usize,
     ) -> String {
-        let mut tokens = vec![cfg.bos_token_id];
+        let tc = &cfg.text_config;
+
+        let mut tokens = vec![tc.bos_token_id];
         tokens.extend(tokenizer.encode(prompt, false).unwrap().get_ids());
 
         for _ in 0..max {
-            let logits = self.forward(&tokens, cfg);
+            let logits = self.forward(&tokens, None, &cfg);
             let last = logits.row(logits.dim().0 - 1);
 
             let next = argmax(last) as u32;
 
-            if next == cfg.eos_token_id {
+            if next == tc.eos_token_id {
                 break;
             }
             tokens.push(next);
@@ -79,23 +83,24 @@ impl Weights {
         tokenizer.decode(&tokens[1..], false).unwrap()
     }
 
-    pub fn forward(&self, token_ids: &[u32], cfg: &TextConfig) -> Array2<f32> {
-        let mut hidden = self.embed(token_ids);
-        let ple = self.prepare_ple(token_ids, hidden.view(), cfg);
+    pub fn forward(&self, token_ids: &[u32], image_features: Option<ArrayView2<f32>>, cfg: &Config) -> Array2<f32> {
+        let tc = &cfg.text_config;
+        
+        let (mut hidden, ple) = self.prepare_inputs(token_ids, image_features, cfg);
 
         // cos_sliding, sin_sliding
         let (cos_s, sin_s) = rope_tables(
             token_ids.len(),
-            cfg.head_dim,
-            cfg.rope_parameters.sliding_attention.rope_theta,
+            tc.head_dim,
+            tc.rope_parameters.sliding_attention.rope_theta,
             1.0,
         );
 
         // cos_global, sin_global
         let (cos_g, sin_g) = rope_tables(
             token_ids.len(),
-            cfg.global_head_dim,
-            cfg.rope_parameters.full_attention.rope_theta,
+            tc.global_head_dim,
+            tc.rope_parameters.full_attention.rope_theta,
             0.25,
         );
 
@@ -103,7 +108,7 @@ impl Weights {
         let mut kv_full: Option<(Array2<f32>, Array2<f32>)> = None;
 
         for (i, block) in self.layer.iter().enumerate() {
-            let is_sliding = cfg.layer_types[i] == "sliding_attention";
+            let is_sliding = tc.layer_types[i] == "sliding_attention";
             let is_shared = i > 14;
 
             let kv_share = if is_shared {
@@ -130,7 +135,7 @@ impl Weights {
                 per_layer_input,
                 cos,
                 sin,
-                cfg,
+                tc,
                 is_sliding,
             );
 
@@ -144,11 +149,47 @@ impl Weights {
             hidden = out;
         }
 
-        let hidden = rms_norm(hidden.view(), self.norm_f.view(), cfg.rms_norm_eps);
+        let hidden = rms_norm(hidden.view(), self.norm_f.view(), tc.rms_norm_eps);
         let logits = hidden.dot(&self.embd.t());
         let logits = logits.mapv(|x| 30.0 * (x / 30.0).tanh());
 
         logits
+    }
+
+    pub fn prepare_inputs(&self, token_ids: &[u32], image_features: Option<ArrayView2<f32>>, cfg: &Config) -> (Array2<f32>, Array3<f32>) {
+        let tc = &cfg.text_config;
+        let mut image_idx: Vec<usize> = Vec::new();
+
+        for (i, &token_id) in token_ids.iter().enumerate() {
+            if token_id == cfg.image_token_id {
+                image_idx.push(i);
+            }
+        }
+
+        let mut ids: Vec<u32> = token_ids.to_vec();
+
+        for &i in &image_idx {
+            ids[i] = tc.pad_token_id;
+        }
+
+        let mut hidden = self.embed(&ids);
+        match image_features {
+            Some(f) => {
+                assert_eq!(f.nrows(), image_idx.len(), "image feature rows != image token count");
+                assert_eq!(f.ncols(), tc.hidden_size, "image feature dim != hidden_size");
+                
+                for (i, &pos) in image_idx.iter().enumerate() {
+                    hidden.row_mut(pos).assign(&f.row(i));
+                }
+            },
+            None => {
+                assert!(image_idx.is_empty(), "image tokens is not empty")
+            }
+        }
+
+        let ple = self.prepare_ple(&ids, hidden.view(), tc);
+
+        (hidden, ple)
     }
 
     const N_LAYERS: usize = 35;

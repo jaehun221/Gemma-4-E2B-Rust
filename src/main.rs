@@ -13,6 +13,6 @@ fn main() {
     let cfg = Config::load("gemma-4-e2b/config.json");
     let tokenizer = Tokenizer::from_file("gemma-4-e2b/tokenizer.json").unwrap();
 
-    let output = w.generate("What is your", &tokenizer, &cfg.text_config, 100);
+    let output = w.generate("The capital of France is", &tokenizer, &cfg, 10);
     println!("{}", output);
 }

@@ -5,6 +5,8 @@ use serde::Deserialize;
 #[derive(Deserialize, Debug)]
 pub struct Config {
     pub text_config: TextConfig,
+    pub vision_config: VisionConfig,
+    pub image_token_id: u32,
 }
 
 #[derive(Deserialize, Debug)]
@@ -48,6 +50,23 @@ pub struct RopeConfig {
 
     // full_attention에만 있으며 없을경우 None
     pub partial_rotary_factor: Option<f32>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct VisionConfig {
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub num_key_value_heads: usize,
+    pub head_dim: usize,
+    pub patch_size: usize,
+    pub pooling_kernel_size: usize,
+    pub rms_norm_eps: f32,
+    pub rope_parameters: RopeConfig,
+    pub standardize: bool,
+    pub use_clipped_linears: bool,
+    pub hidden_activation: String, // text generation에서 사용하던 gelu 재사용
 }
 
 impl Config {

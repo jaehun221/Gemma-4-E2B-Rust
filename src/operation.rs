@@ -112,7 +112,8 @@ fn attention(
             k = rms_norm(k.view(), attn.k_norm.view(), cfg.rms_norm_eps);
             apply_rope(&mut k, cos_table, sin_table);
 
-            let v = rms_norm_no_scale(v.view(), cfg.rms_norm_eps);
+            // gemma4에서는 v를 정규화 할 때 별도의 가중치가 없는것을 확인함
+            let v = rms_norm_v(v.view(), cfg.rms_norm_eps);
 
             (k, v)
         }
@@ -242,7 +243,7 @@ pub fn argmax(x: ArrayView1<f32>) -> usize {
     best_idx
 }
 
-pub fn rms_norm_no_scale(x: ArrayView2<f32>, eps: f32) -> Array2<f32> {
+pub fn rms_norm_v(x: ArrayView2<f32>, eps: f32) -> Array2<f32> {
     let mut out = Array2::zeros(x.dim());
 
     for (i, row) in x.axis_iter(Axis(0)).enumerate() {
