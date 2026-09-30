@@ -12,6 +12,8 @@ use tokenizers::Tokenizer;
 use weights::Weights;
 
 fn main() {
+
+    // image 처리를 아직 구현하지 않았으므로 python으로 구해둔 .npy값을 임시로 사용
     let w = Weights::weights_load("gemma-4-e2b/model.safetensors");
     let cfg = Config::load("gemma-4-e2b/config.json");
     let tokenizer = Tokenizer::from_file("gemma-4-e2b/tokenizer.json").unwrap();
@@ -30,9 +32,12 @@ fn main() {
         .unwrap()
         .remove_axis(Axis(0));
 
+    // python에서 image를 포함한 logits이 Rust Decoder에서 정상적으로 연산되는지 검증
     let (hidden, ple) = w.prepare_inputs(&i_npy_u32, Some(image_features.view()), &cfg);
     let logits = w.forward(&i_npy_u32, Some(image_features.view()), &cfg);
 
+
+    // python 라이브러리로 구한 값과 Rust로 직접 구현한 값이 일치하는지 검증
     println!(
         "hidden: {:e}",
         max_diff(hidden.view(), inputs_embeds_npy.view())
@@ -60,6 +65,7 @@ fn main() {
     println!("{}", output);
 }
 
+// 두 Array 요소별 차를 절댓값으로 변환해 가장 큰 값을 반환한다. 두 Array가 일치하는지 비교
 fn max_diff<D: Dimension>(arr1: ArrayView<f32, D>, arr2: ArrayView<f32, D>) -> f32 {
     assert_eq!(arr1.shape(), arr2.shape(), "shape does not match");
 

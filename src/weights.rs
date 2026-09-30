@@ -84,6 +84,7 @@ impl Weights {
         tokenizer.decode(&tokens[1..], false).unwrap()
     }
 
+    // .npy로 미리 생성해둔 token_id로 테스트 하기 위해 생성
     pub fn generate_input_token_id(
         &self,
         token_ids: &[u32],
