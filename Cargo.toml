@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 ndarray = "0.17.2"
+ndarray-npy = "0.10.0"
 safetensors = "0.8.0"
 tokenizers = "0.23.2"
 bytemuck = "1.25.2"

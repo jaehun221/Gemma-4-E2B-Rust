@@ -1,7 +1,7 @@
 use std::assert_eq;
 
 use memmap2::Mmap;
-use ndarray::{Array1, Array2, Array3, ArrayView2, s};
+use ndarray::{Array, Array1, Array2, Array3, ArrayView2, Dim, Ix, s};
 use safetensors::SafeTensors;
 use tokenizers::Tokenizer;
 
@@ -59,6 +59,7 @@ impl Weights {
     pub fn generate(
         &self,
         prompt: &str,
+        image_features: Option<ArrayView2<f32>>,
         tokenizer: &Tokenizer,
         cfg: &Config,
         max: usize,
@@ -69,7 +70,7 @@ impl Weights {
         tokens.extend(tokenizer.encode(prompt, false).unwrap().get_ids());
 
         for _ in 0..max {
-            let logits = self.forward(&tokens, None, &cfg);
+            let logits = self.forward(&tokens, image_features, &cfg);
             let last = logits.row(logits.dim().0 - 1);
 
             let next = argmax(last) as u32;
@@ -83,9 +84,40 @@ impl Weights {
         tokenizer.decode(&tokens[1..], false).unwrap()
     }
 
-    pub fn forward(&self, token_ids: &[u32], image_features: Option<ArrayView2<f32>>, cfg: &Config) -> Array2<f32> {
+    pub fn generate_input_token_id(
+        &self,
+        token_ids: &[u32],
+        image_features: Option<ArrayView2<f32>>,
+        tokenizer: &Tokenizer,
+        cfg: &Config,
+        max: usize,
+    ) -> String {
         let tc = &cfg.text_config;
-        
+
+        let mut token: Vec<u32> = token_ids.to_vec();
+        for _ in 0..max {
+            let logits = self.forward(&token, image_features, &cfg);
+            let last = logits.row(logits.dim().0 - 1);
+
+            let next = argmax(last) as u32;
+
+            if next == tc.eos_token_id {
+                break;
+            }
+            token.push(next);
+        }
+
+        tokenizer.decode(&token[token_ids.len()..], false).unwrap()
+    }
+
+    pub fn forward(
+        &self,
+        token_ids: &[u32],
+        image_features: Option<ArrayView2<f32>>,
+        cfg: &Config,
+    ) -> Array2<f32> {
+        let tc = &cfg.text_config;
+
         let (mut hidden, ple) = self.prepare_inputs(token_ids, image_features, cfg);
 
         // cos_sliding, sin_sliding
@@ -156,7 +188,12 @@ impl Weights {
         logits
     }
 
-    pub fn prepare_inputs(&self, token_ids: &[u32], image_features: Option<ArrayView2<f32>>, cfg: &Config) -> (Array2<f32>, Array3<f32>) {
+    pub fn prepare_inputs(
+        &self,
+        token_ids: &[u32],
+        image_features: Option<ArrayView2<f32>>,
+        cfg: &Config,
+    ) -> (Array2<f32>, Array3<f32>) {
         let tc = &cfg.text_config;
         let mut image_idx: Vec<usize> = Vec::new();
 
@@ -175,13 +212,21 @@ impl Weights {
         let mut hidden = self.embed(&ids);
         match image_features {
             Some(f) => {
-                assert_eq!(f.nrows(), image_idx.len(), "image feature rows != image token count");
-                assert_eq!(f.ncols(), tc.hidden_size, "image feature dim != hidden_size");
-                
+                assert_eq!(
+                    f.nrows(),
+                    image_idx.len(),
+                    "image feature rows != image token count"
+                );
+                assert_eq!(
+                    f.ncols(),
+                    tc.hidden_size,
+                    "image feature dim != hidden_size"
+                );
+
                 for (i, &pos) in image_idx.iter().enumerate() {
                     hidden.row_mut(pos).assign(&f.row(i));
                 }
-            },
+            }
             None => {
                 assert!(image_idx.is_empty(), "image tokens is not empty")
             }
@@ -292,6 +337,15 @@ impl Weights {
 
         out
     }
+
+    // fn get_tensor<const N: usize>(tensors: &SafeTensors, name: &str) -> Array<f32, Dim<[Ix; N]>> {
+    //     let t = tensors
+    //         .tensor(name)
+    //         .unwrap_or_else(|_| panic!("get_tensor1 failed: {name}"));
+    //     let s = t.shape();
+    //     let d = Array::from_shape_vec(s,Self::to_f32(t.data())).unwrap();
+    //     d.into_dimensionality::<Dim<[Ix; N]>>().unwrap()
+    // }
 
     fn get_tensor1(tensors: &SafeTensors, name: &str) -> Array1<f32> {
         let t = tensors
