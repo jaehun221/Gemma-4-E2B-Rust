@@ -35,7 +35,7 @@ pub struct TextConfig {
 
     pub bos_token_id: u32,
     pub eos_token_id: u32,
-    pub pad_token_id: u32, // batch processing에 사용됨
+    pub pad_token_id: u32, // imgae placeholder에 사용
 }
 
 #[derive(Deserialize, Debug)]
@@ -52,6 +52,7 @@ pub struct RopeConfig {
     pub partial_rotary_factor: Option<f32>,
 }
 
+// TextConfi와 중복되는 filed가 있으나 내부 값이 다르고 연산 함수 구현시 편리함
 #[derive(Deserialize, Debug)]
 pub struct VisionConfig {
     pub hidden_size: usize,
@@ -69,9 +70,29 @@ pub struct VisionConfig {
     pub hidden_activation: String, // text generation에서 사용하던 gelu 재사용
 }
 
+#[derive(Deserialize, Debug)]
+pub struct ProcessorConfig {
+    pub image_processor: ImageProcessorConfig,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ImageProcessorConfig {
+    pub max_soft_tokens: usize,
+    pub patch_size: usize,
+    pub pooling_kernel_size: usize,
+    pub rescale_factor: f32,
+}
+
 impl Config {
-    pub fn load(path: &str) -> Self {
+    pub fn load_config(path: &str) -> Self {
         let text = std::fs::read_to_string(path).expect("config.json read failed");
         serde_json::from_str(&text).expect("config.json parse failed")
+    }
+}
+
+impl ProcessorConfig {
+    pub fn load_processor_config(path: &str) -> Self {
+        let text = std::fs::read_to_string(path).expect("processor_config.json read failed");
+        serde_json::from_str(&text).expect("processor_config.json parse failed")
     }
 }

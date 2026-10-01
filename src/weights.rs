@@ -8,6 +8,7 @@ use tokenizers::Tokenizer;
 use crate::config::{Config, TextConfig};
 use crate::operation::{argmax, decoder_block, rms_norm, rope_tables};
 
+// 현재 f32로 처리하고 있으나, MultiModal 구현 후 양자화 적용을 고려
 pub struct Weights {
     embd: Array2<f32>,
     layer: Vec<Block>,
@@ -339,6 +340,8 @@ impl Weights {
         out
     }
 
+    // get_tensor 하나로 처리하기 위함
+    // SafeTensors를 포함하는 Struct를 생성하여 get_tensor 함수의 위치를 변경하는 것을 고려
     // fn get_tensor<const N: usize>(tensors: &SafeTensors, name: &str) -> Array<f32, Dim<[Ix; N]>> {
     //     let t = tensors
     //         .tensor(name)

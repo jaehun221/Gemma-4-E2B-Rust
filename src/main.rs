@@ -1,21 +1,23 @@
 mod config;
 mod operation;
+mod vision;
 mod weights;
 use core::panic;
 use std::assert_eq;
 use std::iter::zip;
 
 use config::Config;
-use ndarray::{Array2, Array3, Array4, ArrayView, Axis, Dim, Dimension};
+use ndarray::{Array2, Array3, Array4, ArrayView, Axis, Dimension};
 use ndarray_npy::read_npy;
 use tokenizers::Tokenizer;
 use weights::Weights;
 
 fn main() {
+    // TODO image 전처리 및 VIT
 
     // image 처리를 아직 구현하지 않았으므로 python으로 구해둔 .npy값을 임시로 사용
     let w = Weights::weights_load("gemma-4-e2b/model.safetensors");
-    let cfg = Config::load("gemma-4-e2b/config.json");
+    let cfg = Config::load_config("gemma-4-e2b/config.json");
     let tokenizer = Tokenizer::from_file("gemma-4-e2b/tokenizer.json").unwrap();
 
     let i_npy: Array2<i64> = read_npy("ref/input_ids.npy").expect("read failed");
@@ -35,7 +37,6 @@ fn main() {
     // python에서 image를 포함한 logits이 Rust Decoder에서 정상적으로 연산되는지 검증
     let (hidden, ple) = w.prepare_inputs(&i_npy_u32, Some(image_features.view()), &cfg);
     let logits = w.forward(&i_npy_u32, Some(image_features.view()), &cfg);
-
 
     // python 라이브러리로 구한 값과 Rust로 직접 구현한 값이 일치하는지 검증
     println!(
