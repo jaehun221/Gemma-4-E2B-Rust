@@ -9,9 +9,7 @@ pub struct PatchInput {
     pub grid: (usize, usize),
 }
 
-pub struct VisionWeights {
-    
-}
+pub struct VisionWeights {}
 
 // image 연산을 위한 전처리
 pub fn preprocess(path: &str, prc_cfg: &ProcessorConfig) -> PatchInput {
@@ -63,8 +61,8 @@ pub fn preprocess(path: &str, prc_cfg: &ProcessorConfig) -> PatchInput {
         }
     }
 
-    let pixels =
-        Array2::from_shape_vec((ph * pw, patch_len), pixel_buf).expect("patch buffer size mismatch");
+    let pixels = Array2::from_shape_vec((ph * pw, patch_len), pixel_buf)
+        .expect("patch buffer size mismatch");
 
     PatchInput {
         pixels,
@@ -72,5 +70,3 @@ pub fn preprocess(path: &str, prc_cfg: &ProcessorConfig) -> PatchInput {
         grid: (pw, ph),
     }
 }
-
-
