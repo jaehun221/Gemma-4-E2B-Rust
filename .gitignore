@@ -1,3 +1,5 @@
 /target
 /gemma-4-e2b
 /ref
+/modeling_gemma4_v5.16.1.py
+/image_processing_gemma4_v5.16.1.py

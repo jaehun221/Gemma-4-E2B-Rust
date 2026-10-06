@@ -1,10 +1,20 @@
 use image::{ImageReader, RgbImage};
-use ndarray::Array3;
+use ndarray::{Array2, Array3, s};
 
 use crate::config::ProcessorConfig;
 
-// image 연산을 위한 전처리 작업
-pub fn preprocess(path: &str, prc_cfg: &ProcessorConfig) {
+pub struct PatchInput {
+    pub pixels: Array2<f32>,
+    pub positions: Vec<(usize, usize)>,
+    pub grid: (usize, usize),
+}
+
+pub struct VisionWeights {
+    
+}
+
+// image 연산을 위한 전처리
+pub fn preprocess(path: &str, prc_cfg: &ProcessorConfig) -> PatchInput {
     let img_cfg = &prc_cfg.image_processor;
 
     let img: RgbImage = ImageReader::open(path)
@@ -33,5 +43,34 @@ pub fn preprocess(path: &str, prc_cfg: &ProcessorConfig) {
         .map(|&x| x as f32 * img_cfg.rescale_factor)
         .collect();
 
-    let img_arr = Array3::from_shape_vec((h_target, w_target, 3), img_data).expect("shape not matched");
+    // resize logic 구현 후에는 h_target, w_target이 아닌 resize_img 사용
+    let img_arr =
+        Array3::from_shape_vec((h_target, w_target, 3), img_data).expect("shape not match");
+
+    let p = img_cfg.patch_size;
+    let ph = h_target / p;
+    let pw = w_target / p;
+    let patch_len = p * p * 3;
+
+    let mut pixel_buf: Vec<f32> = Vec::with_capacity(ph * pw * patch_len);
+    let mut positions: Vec<(usize, usize)> = Vec::with_capacity(ph * pw);
+
+    for r in 0..ph {
+        for c in 0..pw {
+            let patch = img_arr.slice(s![r * p..r * p + p, c * p..c * p + p, ..]);
+            pixel_buf.extend(patch.iter());
+            positions.push((c, r));
+        }
+    }
+
+    let pixels =
+        Array2::from_shape_vec((ph * pw, patch_len), pixel_buf).expect("patch buffer size mismatch");
+
+    PatchInput {
+        pixels,
+        positions,
+        grid: (pw, ph),
+    }
 }
+
+
