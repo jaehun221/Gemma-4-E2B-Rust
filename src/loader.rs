@@ -16,7 +16,7 @@ pub fn get_tensor<D: Dimension>(tensors: &SafeTensors, name: &str) -> Array<f32,
         .unwrap_or_else(|_| panic!("tensor not found: {name}"));
     let s = t.shape();
     let d = Array::from_shape_vec(s, to_f32(t.data())).unwrap();
-    
+
     d.into_dimensionality::<D>()
         .unwrap_or_else(|_| panic!("dimension mismatch {name}, shape: {s:?}"))
 }

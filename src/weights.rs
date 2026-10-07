@@ -1,13 +1,15 @@
 use std::assert_eq;
 
 use memmap2::Mmap;
-use ndarray::{ Array1, Array2, Array3, ArrayView2, Ix, Dim, s};
+use ndarray::{Array1, Array2, Array3, ArrayView2, s};
 use safetensors::SafeTensors;
 use tokenizers::Tokenizer;
 
 use crate::config::{Config, TextConfig};
+use crate::loader::{get_tensor, to_f32};
 use crate::operation::{argmax, decoder_block, rms_norm, rope_tables};
-use crate::loader::{ get_tensor, to_f32 };
+use crate::vision::VisionWeights;
+
 // 현재 f32로 처리하고 있으나, MultiModal 구현 후 양자화 적용을 고려
 pub struct Weights {
     embd: Array2<f32>,
@@ -17,6 +19,8 @@ pub struct Weights {
     ple_table_offset: (usize, usize, usize),
     ple_model_proj: Array2<f32>,
     ple_proj_norm: Array1<f32>,
+
+    pub vision: VisionWeights,
 }
 
 pub struct Block {
@@ -185,7 +189,8 @@ impl Weights {
 
         let hidden = rms_norm(hidden.view(), self.norm_f.view(), tc.rms_norm_eps);
         let logits = hidden.dot(&self.embd.t());
-        let logits = logits.mapv(|x| 30.0 * (x / 30.0).tanh());
+        let cap = tc.final_logit_softcapping;
+        let logits = logits.mapv(|x| cap * (x / cap).tanh());
 
         logits
     }
@@ -239,16 +244,14 @@ impl Weights {
         (hidden, ple)
     }
 
-    const N_LAYERS: usize = 35;
-
-    pub fn weights_load(path: &str) -> Self {
+    pub fn weights_load(path: &str, cfg: &Config) -> Self {
         let file = std::fs::File::open(path).expect("file open failed");
         let mmap = unsafe { Mmap::map(&file).expect("mmap failed") };
         let tensors = SafeTensors::deserialize(&mmap).expect("failed to parse safetensors");
 
-        let mut layer: Vec<Block> = Vec::with_capacity(Self::N_LAYERS);
+        let mut layer: Vec<Block> = Vec::with_capacity(cfg.text_config.num_hidden_layers);
 
-        for i in 0..Self::N_LAYERS {
+        for i in 0..cfg.text_config.num_hidden_layers {
             let p = format!("model.language_model.layers.{i}");
             layer.push(Block {
                 attn: Attn {
@@ -280,14 +283,8 @@ impl Weights {
                     ),
                 },
                 ple: PleLayer {
-                    projection: get_tensor(
-                        &tensors,
-                        &format!("{p}.per_layer_projection.weight"),
-                    ),
-                    input_gate: get_tensor(
-                        &tensors,
-                        &format!("{p}.per_layer_input_gate.weight"),
-                    ),
+                    projection: get_tensor(&tensors, &format!("{p}.per_layer_projection.weight")),
+                    input_gate: get_tensor(&tensors, &format!("{p}.per_layer_input_gate.weight")),
                     post_norm: get_tensor(
                         &tensors,
                         &format!("{p}.post_per_layer_input_norm.weight"),
@@ -306,6 +303,8 @@ impl Weights {
             (offset, t.shape()[0], t.shape()[1])
         };
 
+        let vision = VisionWeights::load(&tensors, &cfg.vision_config);
+        
         Weights {
             embd: get_tensor(&tensors, "model.language_model.embed_tokens.weight"),
             norm_f: get_tensor(&tensors, "model.language_model.norm.weight"),
@@ -320,6 +319,7 @@ impl Weights {
             ple_table_offset,
             layer,
             mmap,
+            vision,
         }
     }
 

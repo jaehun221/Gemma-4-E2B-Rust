@@ -1,7 +1,10 @@
 use image::{ImageReader, RgbImage};
-use ndarray::{Array2, Array3, s};
+use ndarray::{Axis, Array1, Array2, Array3, Ix2, Ix0, Ix3, s};
+use safetensors::SafeTensors;
+use crate::loader::get_tensor;
+use crate::weights::Norms;
 
-use crate::config::ProcessorConfig;
+use crate::config::{ProcessorConfig, VisionConfig};
 
 pub struct PatchInput {
     pub pixels: Array2<f32>,
@@ -9,7 +12,37 @@ pub struct PatchInput {
     pub grid: (usize, usize),
 }
 
-pub struct VisionWeights {}
+pub struct ClippedLinear {
+    pub weight: Array2<f32>,
+    pub in_min: f32,
+    pub in_max: f32,
+    pub out_min: f32,
+    pub out_max: f32,
+}
+
+pub struct VisionLayer {
+    // attention
+    pub q: ClippedLinear,
+    pub k: ClippedLinear,
+    pub v: ClippedLinear,
+    pub o: ClippedLinear,
+    pub q_norm: Array1<f32>,   // [64]
+    pub k_norm: Array1<f32>,   // [64]
+    // mlp
+    pub gate: ClippedLinear,
+    pub up: ClippedLinear,
+    pub down: ClippedLinear,
+    // sandwich norm
+    pub norm: Norms,           // 텍스트의 Norms 재사용
+}
+
+pub struct VisionWeights {
+    pub patch_proj: Array2<f32>,
+    pub pos_table_x: Array2<f32>,
+    pub pos_table_y: Array2<f32>,
+    pub layers: Vec<VisionLayer>,
+    pub embed_proj: Array2<f32>,
+}
 
 // image 연산을 위한 전처리
 pub fn preprocess(path: &str, prc_cfg: &ProcessorConfig) -> PatchInput {
@@ -68,5 +101,65 @@ pub fn preprocess(path: &str, prc_cfg: &ProcessorConfig) -> PatchInput {
         pixels,
         positions,
         grid: (pw, ph),
+    }
+}
+
+impl VisionWeights {
+    pub fn load(tensors: &SafeTensors, cfg: &VisionConfig) -> Self {
+        let clipped = |p: &str| ClippedLinear {
+            weight: get_tensor::<Ix2>(tensors, &format!("{p}.linear.weight")),
+            in_min: get_tensor::<Ix0>(tensors, &format!("{p}.input_min")).into_scalar(),
+            in_max: get_tensor::<Ix0>(tensors, &format!("{p}.input_max")).into_scalar(),
+            out_min: get_tensor::<Ix0>(tensors, &format!("{p}.output_min")).into_scalar(),
+            out_max: get_tensor::<Ix0>(tensors, &format!("{p}.output_max")).into_scalar(),
+        };
+
+        let layers: Vec<VisionLayer> = (0..cfg.num_hidden_layers)
+            .map(|i| {
+                let p = format!("model.vision_tower.encoder.layers.{i}");
+                VisionLayer {
+                    // attention
+                    q: clipped(&format!("{p}.self_attn.q_proj")),
+                    k: clipped(&format!("{p}.self_attn.k_proj")),
+                    v: clipped(&format!("{p}.self_attn.v_proj")),
+                    o: clipped(&format!("{p}.self_attn.o_proj")),
+                    q_norm: get_tensor(tensors, &format!("{p}.self_attn.q_norm.weight")),
+                    k_norm: get_tensor(tensors, &format!("{p}.self_attn.k_norm.weight")),
+                    // mlp
+                    gate: clipped(&format!("{p}.mlp.gate_proj")),
+                    up: clipped(&format!("{p}.mlp.up_proj")),
+                    down: clipped(&format!("{p}.mlp.down_proj")),
+                    // sandwich norm
+                    norm: Norms {
+                        input_norm: get_tensor(tensors, &format!("{p}.input_layernorm.weight")),
+                        post_attn_norm: get_tensor(
+                            tensors,
+                            &format!("{p}.post_attention_layernorm.weight"),
+                        ),
+                        pre_ffn_norm: get_tensor(
+                            tensors,
+                            &format!("{p}.pre_feedforward_layernorm.weight"),
+                        ),
+                        post_ffn_norm: get_tensor(
+                            tensors,
+                            &format!("{p}.post_feedforward_layernorm.weight"),
+                        ),
+                    },
+                }
+            })
+            .collect();
+
+        let pos = get_tensor::<Ix3>(
+            tensors,
+            "model.vision_tower.patch_embedder.position_embedding_table",
+        );
+
+        Self {
+            patch_proj: get_tensor(tensors, "model.vision_tower.patch_embedder.input_proj.weight"),
+            pos_table_x: pos.index_axis(Axis(0), 0).to_owned(),
+            pos_table_y: pos.index_axis(Axis(0), 1).to_owned(),
+            layers,
+            embed_proj: get_tensor(tensors, "model.embed_vision.embedding_projection.weight"),
+        }
     }
 }
