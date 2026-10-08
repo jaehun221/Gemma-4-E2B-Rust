@@ -304,7 +304,7 @@ impl Weights {
         };
 
         let vision = VisionWeights::load(&tensors, &cfg.vision_config);
-        
+
         Weights {
             embd: get_tensor(&tensors, "model.language_model.embed_tokens.weight"),
             norm_f: get_tensor(&tensors, "model.language_model.norm.weight"),

@@ -9,7 +9,7 @@ model = Gemma4ForConditionalGeneration.from_pretrained(
 ).eval()
 
 
-image = Image.open("test_288x192.png")
+image = Image.open("test_480x288.png")
 prompt = f"{processor.image_token}Describe this image."
 inputs = processor(text=prompt, images=image, max_soft_tokens=70, return_tensors="pt")
 print(processor.tokenizer.convert_ids_to_tokens(inputs["input_ids"][0]))

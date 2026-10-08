@@ -6,11 +6,12 @@ mod weights;
 
 use std::iter::zip;
 
-use config::Config;
-use ndarray::{Array2, Array3, Array4, ArrayView, Axis, Dimension};
+use config::{Config, ProcessorConfig};
+use ndarray::{Array2, Array3, Array4, ArrayView, Axis, Dimension, s};
 use ndarray_npy::read_npy;
 use tokenizers::Tokenizer;
 use weights::Weights;
+use vision::preprocess;
 
 fn main() {
     // TODO image 전처리 및 VIT
@@ -40,34 +41,33 @@ fn main() {
     let logits = w.forward(&i_npy_u32, Some(image_features.view()), &cfg);
 
     // python 라이브러리로 구한 값과 Rust로 직접 구현한 값이 일치하는지 검증
-    // println!(
-    //     "hidden: {:e}",
-    //     max_diff(hidden.view(), inputs_embeds_npy.view())
-    // );
-    // println!(
-    //     "ple: {:e}",
-    //     max_diff(ple.view(), per_layer_inputs_npy.view())
-    // );
-    // println!(
-    //     "logits: {:e}",
-    //     max_diff(
-    //         logits.row(logits.nrows() - 1),
-    //         logits_npy.row(logits_npy.nrows() - 1)
-    //     )
-    // );
-
-
-    let output = w.generate("The capital of France is", None, &tokenizer, &cfg, 20);
-    println!("{}", output);
-
-    let output = w.generate_input_token_id(
-        &i_npy_u32,
-        Some(image_features.view()),
-        &tokenizer,
-        &cfg,
-        20,
+    println!(
+        "hidden: {:e}",
+        max_diff(hidden.view(), inputs_embeds_npy.view())
     );
-    println!("{}", output);
+    println!(
+        "ple: {:e}",
+        max_diff(ple.view(), per_layer_inputs_npy.view())
+    );
+    println!(
+        "logits: {:e}",
+        max_diff(
+            logits.row(logits.nrows() - 1),
+            logits_npy.row(logits_npy.nrows() - 1)
+        )
+    );
+
+    // let output = w.generate("The capital of France is", None, &tokenizer, &cfg, 20);
+    // println!("{}", output);
+
+    // let output = w.generate_input_token_id(
+    //     &i_npy_u32,
+    //     Some(image_features.view()),
+    //     &tokenizer,
+    //     &cfg,
+    //     20,
+    // );
+    // println!("{}", output);
 }
 
 // 두 Array 요소별 차를 절댓값으로 변환해 가장 큰 값을 반환한다. 두 Array가 일치하는지 비교
@@ -86,4 +86,46 @@ fn max_diff<D: Dimension>(arr1: ArrayView<f32, D>, arr2: ArrayView<f32, D>) -> f
     }
 
     max
+}
+
+
+fn verify_vision_input(w: &Weights, prc_cfg: &ProcessorConfig) {
+    // Rust 전처리
+    let input = preprocess("test_480x288.png", prc_cfg);
+    let n = input.pixels.nrows();   // 540
+
+    // 1. 전처리 픽셀: [1, 630, 768] → 배치 축 제거 → 앞 540행
+    let pv: Array2<f32> = read_npy::<_, Array3<f32>>("ref/pixel_values.npy")
+        .unwrap()
+        .remove_axis(Axis(0));
+    println!("pixels      : {:e}", max_diff(input.pixels.view(), pv.slice(s![..n, ..])));
+
+    // 2. 좌표: [1, 630, 2] (i64) → 배치 축 제거 → 앞 540행과 하나씩 비교
+    let pos: Array2<i64> = read_npy::<_, Array3<i64>>("ref/image_position_ids.npy")
+        .unwrap()
+        .remove_axis(Axis(0));
+    let mismatch = input
+        .positions
+        .iter()
+        .enumerate()
+        .filter(|&(i, &(x, y))| pos[[i, 0]] != x as i64 || pos[[i, 1]] != y as i64)
+        .count();
+    println!("positions   : {mismatch} mismatches / {n}");
+
+    // 3. 패치 임베딩: [1, 630, 768] → 배치 축 제거 → 앞 540행
+    let out = w.vision.patch_embed(&input);
+    let pe: Array2<f32> = read_npy::<_, Array3<f32>>("ref/patch_embed.npy")
+        .unwrap()
+        .remove_axis(Axis(0));
+    let pe = pe.slice(s![..n, ..]);
+    println!("patch_embed : {:e}", max_diff(out.view(), pe));
+
+    // 위치별: 왼쪽 위 / 가운데 / 오른쪽 아래
+    for idx in [0, 285, n - 1] {
+        println!(
+            "  patch {idx:>3} {:?}: {:e}",
+            input.positions[idx],
+            max_diff(out.row(idx), pe.row(idx)),
+        );
+    }
 }

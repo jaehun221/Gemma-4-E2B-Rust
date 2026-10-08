@@ -1,10 +1,10 @@
 use image::{ImageReader, RgbImage};
-use ndarray::{Axis, Array1, Array2, Array3, Ix2, Ix0, Ix3, s};
+use ndarray::{Array1, Array2, Array3, Axis, Ix0, Ix2, Ix3, s};
 use safetensors::SafeTensors;
-use crate::loader::get_tensor;
-use crate::weights::Norms;
 
 use crate::config::{ProcessorConfig, VisionConfig};
+use crate::loader::get_tensor;
+use crate::weights::Norms;
 
 pub struct PatchInput {
     pub pixels: Array2<f32>,
@@ -26,14 +26,14 @@ pub struct VisionLayer {
     pub k: ClippedLinear,
     pub v: ClippedLinear,
     pub o: ClippedLinear,
-    pub q_norm: Array1<f32>,   // [64]
-    pub k_norm: Array1<f32>,   // [64]
+    pub q_norm: Array1<f32>, // [64]
+    pub k_norm: Array1<f32>, // [64]
     // mlp
     pub gate: ClippedLinear,
     pub up: ClippedLinear,
     pub down: ClippedLinear,
     // sandwich norm
-    pub norm: Norms,           // 텍스트의 Norms 재사용
+    pub norm: Norms, // 텍스트의 Norms 재사용
 }
 
 pub struct VisionWeights {
@@ -155,11 +155,30 @@ impl VisionWeights {
         );
 
         Self {
-            patch_proj: get_tensor(tensors, "model.vision_tower.patch_embedder.input_proj.weight"),
+            patch_proj: get_tensor(
+                tensors,
+                "model.vision_tower.patch_embedder.input_proj.weight",
+            ),
             pos_table_x: pos.index_axis(Axis(0), 0).to_owned(),
             pos_table_y: pos.index_axis(Axis(0), 1).to_owned(),
             layers,
             embed_proj: get_tensor(tensors, "model.embed_vision.embedding_projection.weight"),
         }
     }
+
+    pub fn patch_embed(&self, input: &PatchInput) -> Array2<f32> {
+        let x = input.pixels.mapv(|v| 2.0 * (v - 0.5));
+
+        let mut h = x.dot(&self.patch_proj.t());
+
+        for (n, &(px, py)) in input.positions.iter().enumerate() {
+            let mut row = h.row_mut(n);
+            row += &self.pos_table_x.row(px);
+            row += &self.pos_table_y.row(py);
+        }
+
+        h
+    }
+
+    
 }
