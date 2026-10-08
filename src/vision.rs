@@ -1,5 +1,5 @@
 use image::{ImageReader, RgbImage};
-use ndarray::{Array1, Array2, Array3, Axis, Ix0, Ix2, Ix3, s};
+use ndarray::{Array1, Array2, Array3, ArrayView2, Axis, Ix0, Ix2, Ix3, s};
 use safetensors::SafeTensors;
 
 use crate::config::{ProcessorConfig, VisionConfig};
@@ -182,3 +182,13 @@ impl VisionWeights {
 
     
 }
+
+impl ClippedLinear {
+
+    pub fn forward(&self, x: ArrayView2<f32>) -> Array2<f32> {
+        let x = x.mapv(|v| v.clamp(self.in_min, self.in_max));
+        let y = x.dot(&self.weight.t());
+        y.mapv(|v| v.clamp(self.out_min, self.out_max))
+    }
+}
+
