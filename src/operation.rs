@@ -68,6 +68,56 @@ pub fn apply_rope(q: &mut Array2<f32>, cos_table: &Array2<f32>, sin_table: &Arra
     }
 }
 
+pub fn rope_tables_2d(positions: &[(usize, usize)], head_dim: usize, base: f32) -> (Array2<f32>, Array2<f32>) {
+    let half = head_dim / 2;
+    let n_freq = half / 2;
+
+    let inv_freq: Vec<f32> = (0..n_freq).map(|i| 1.0 / base.powf((2 * i) as f32 / half as f32)).collect();
+
+    let n = positions.len();
+    let mut cos = Array2::<f32>::zeros((n, head_dim));
+    let mut sin = Array2::<f32>::zeros((n, head_dim));
+
+    for (p, &(x, y)) in positions.iter().enumerate() {
+        for (axis, pos) in [(0, x), (1, y)] {
+            let off = axis * half;
+            for i in 0..n_freq {
+                let angle = pos as f32 * inv_freq[i];
+                let (s, c) = angle.sin_cos();
+
+                cos[[p, off + i]] = c;
+                cos[[p, off + i + n_freq]] = c;
+                sin[[p, off + i]] = s;
+                sin[[p, off + i + n_freq]] = s;
+            }
+        }
+    }
+
+    (cos, sin)
+}
+
+pub fn apply_rope_2d(x: &mut Array2<f32>, cos: &Array2<f32>, sin: &Array2<f32>, num_heads: usize, head_dim: usize) {
+    let half = head_dim / 2;
+    let quarter = half / 2;
+
+    for p in 0..x.nrows() {
+        for h in 0..num_heads {
+            for axis in 0..2 {
+                let xb = h * head_dim + axis * half;
+                let tb = axis * half;
+                for j in 0..quarter {
+                    let a = x[[p, xb +j]];
+                    let b = x[[p, xb + j + quarter]];
+                    let c = cos[[p, tb + j]];
+                    let s = sin[[p, tb + j]];
+                    x[[p, xb +j]] = a * c - b *s;
+                    x[[p, xb + j + quarter]] = b* c + a * s;
+                }
+            }
+        }
+    }
+}
+
 pub fn mlp(
     x: ArrayView2<f32>,
     gate_proj: ArrayView2<f32>,
